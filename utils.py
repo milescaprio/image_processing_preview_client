@@ -9,4 +9,13 @@ def mapval(value, valMin, valMax, rightMin, rightMax):
     # Convert the 0-1 range into a value in the right range.
     return rightMin + (valueScaled * rightSpan)
 
+def add2(a, b):
+    return (a[0] + b[0], a[1] + b[1])
+
+def sub2(a, b):
+    return (a[0] - b[0], a[1] - b[1])
+
 def clamp(n, smallest, largest): return max(smallest, min(n, largest))
+
+def clamp2(s : tuple[float, float], minx, miny, maxx, maxy):
+    return (clamp(s[0], minx, maxx), clamp(s[1], miny, maxy))

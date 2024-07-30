@@ -1,30 +1,33 @@
 import pygame as pg
 from utils import *
 from typing import Callable
+from tkinter import filedialog
 from tkinter.filedialog import askopenfile
 from PIL import Image
 import numpy as np 
+from tkinter import filedialog
 #Works modularly with lib, visual is a configuration that can be chosen when importing lib
-
-width = 600
-height = 600
 
 class UIConfiguation:
     text_color = "#616161"
     background_color = "#FDF6E3"
+    background_color2 = "#FF0000"
     button_color = "#FAFAFA"
     hover_color = "#ABA696"
     typing_background = "#FFFFFF"
     property_count = 2
-    width = 600
+    width = 750
     height = lambda self: self.property_count * 100 + 600
-    preview = [(100,100),(500,500)]
+    preview_coords = (50,50)
+    preview_size = (500,500)
     slider   = lambda self, i:    [(100        , 520 + 100 * i), (300        , 580+100*i)]
     autofunc = lambda self, i, j: [(320 + 100*j, 520 + 100 * j), (320 + 100*j, 580+100*i)]
     save_button = lambda self, i: [(500, 520 + 100 * i), (550, 580 + 100 * i)]
     font_size : int = 20
+    font_size_small : int = 12
     font_lib = "OpenSans.ttf"
-    font_init = None
+    font = None
+    font_small = None
 
 class Automation:
     name : str = "Joe",
@@ -62,20 +65,20 @@ class Slider:
     mouse_on : bool = False
     mouse_grab_offset : float = 0
 
-    def __init__(self, name, interval_left, interval_right, interval_segments, slider_color):
-        self.name = name
+    def __init__(self, interval_left, interval_right, interval_segments, slider_color):
         self.interval_left = interval_left
         self.interval_right = interval_right
+        self.interval_segments = interval_segments
 
     def get_slider_rel_x_location(self):
         lpx1 = self.slider_px_rel_location_window[0][0]
-        lpx2 = self.slider_px_rel_location_window[0][1]
+        lpx2 = self.slider_px_rel_location_window[1][0]
         return clamp(mapval(self.value, self.interval_left, self.interval_right, lpx1, lpx2), lpx1, lpx2)
 
     def get_value_from_slider(self, rel_mouse_x):
         rel_slider_x = rel_mouse_x
         lpx1 = self.slider_px_rel_location_window[0][0]
-        lpx2 = self.slider_px_rel_location_window[0][1]
+        lpx2 = self.slider_px_rel_location_window[1][0]
         il = self.interval_left
         ir = self.interval_right
         suggested_value = mapval(rel_slider_x, lpx1, lpx2, self.interval_left, self.interval_right)
@@ -84,6 +87,7 @@ class Slider:
         #the nearest corresponding discretized value. This can be done by mapping the range of values
         #to a corresponding range of integer values, and then rounding and converting back.
         seg = round(mapval(suggested_value, il, ir, 0, self.interval_segments - 1))
+        print("seg#:"+str(seg))
         value = mapval(seg, 0, self.interval_segments - 1, il, ir)
         return value
     
@@ -107,6 +111,7 @@ class Slider:
                 self.mouse_on = False
         if self.mouse_on: 
             self.value = self.get_value_from_slider(rel_mouse_x - self.mouse_grab_offset)
+        #print(self.value)
 
     def render(self, interface, x, y):
         sx = self.get_slider_rel_x_location()
@@ -126,8 +131,10 @@ class Button:
     hover_color = "#888888"
     text_color = "#555555"
     font = None
+    recc_x : int = 0 #Reccomended location, for storing in configuration. Non-binding to this location.
+    recc_y : int = 0
 
-    def __init__(self, label, font, width, height, color, hover_color,text_color):
+    def __init__(self, label, font, width, height, color, hover_color, text_color, recc_x, recc_y):
         self.label =label
         self.font = font
         self.width = width
@@ -135,7 +142,8 @@ class Button:
         self.color = color
         self.hover_color = hover_color
         self.text_color = text_color
-
+        self.recc_x = recc_x
+        self.recc_y = recc_y
     def is_mouse_over(self, rel_mouse_x, rel_mouse_y):
         #TODO: Use collidepoint instead?
         return 0 < rel_mouse_x and rel_mouse_x < self.width and 0 < rel_mouse_y and rel_mouse_y < self.height
@@ -146,10 +154,15 @@ class Button:
             if e.type == pg.MOUSEBUTTONDOWN and mob:
                 return True
             
-    def render(self, interface, x, y, rel_mouse_x, rel_mouse_y):
+    def render(self, interface, x, y, mouse_x, mouse_y):
+        rel_mouse_x = mouse_x - x
+        rel_mouse_y = mouse_y - y
         r = pg.Rect(x,y,self.width,self.height)
         pg.draw.rect(interface.screen, self.hover_color if self.is_mouse_over(rel_mouse_x, rel_mouse_y) else self.color, r)
         interface.drawText(interface.screen, self.label, self.text_color, r, self.font, aa = True)
+    
+    def render_rec(self, interface, mouse_x, mouse_y):
+        self.render(interface, self.recc_x, self.recc_y, mouse_x, mouse_y)
 
 class ImagePreviewBox:
     """
@@ -171,20 +184,28 @@ class ImagePreviewBox:
     unfiltered_image_coords : tuple[int,int] = (0,0)
     unfiltered_image_zoom : int = 1
     unfiltered_original_size : tuple[int,int] = None
+    unzoomed_image : pg.Surface = None
     curr_image : pg.Surface = None
     curr_fp : str = None
     loading_fp : str = None
 
     #States
-    should_state : int = 300 #100 for unfiltered, 200 for filtered, 300 for loading
+    should_state : int = 100 #100 for unfiltered, 200 for filtered, 300 for loading
     image_state : int = 0 #Trailing variable, will match should_state and regenerate image as needed
     zoom_mode = False
-
+    zoom_ratio : float = 1.0
+    zoom_rate : float = 1.05
+    mouse_on : bool = False
+    mouse_grab_offset : tuple[float, float] = None
 
     unfiltered_image_source : Callable[[], pg.Surface] = None
     # Unfiltered image source should constantly return the whole image. When it is panned around,
     # it will actually be viewed through a window: the whole thing will be rendered and then 
     # background color will be overlay to show only a section of the image.
+
+    #TODO: figure out a way this can dynamically change with a cached image instead -- probably a flag,
+    #rename the variable to represent both
+
     filtered_image_source : Callable[[list[tuple[int,int]]], pg.Surface] = None
     # Filtered image source allows for more processing time by not requiring the image to be able to
     # be panned and zoomed on: given an excerpt, a loaded pg surface of a small processed image
@@ -230,34 +251,97 @@ class ImagePreviewBox:
         #return PLACEHOLDER
         pass
 
-    def render(self, interface, x, y):
-        #TODO Add thread so it doesnt wait
-        #Figure out some sort of regeneration event
-        c = self.unfiltered_image_coords
+    def get_curr_img_size(self):
+        return self.get_curr_image().get_size()
+
+    def get_unzoomed_img_size(self):
+        self.get_curr_image()
+        return self.unzoomed_image.get_size()
+
+    def mouse_on_image(self, rel_mouse_x, rel_mouse_y) -> bool:
+        return 0 <= rel_mouse_x and rel_mouse_x <= self.width and 0 <= rel_mouse_y and rel_mouse_y <= self.height
+    
+    def try_drag_zoom(self, rel_mouse_x, rel_mouse_y, recent_events) -> bool:
+        moi = self.mouse_on_image(rel_mouse_x, rel_mouse_y)
+        for e in recent_events:
+            if e.type == pg.MOUSEBUTTONDOWN and moi:
+                self.mouse_on = True
+                self.mouse_grab_offset = sub2((rel_mouse_x,rel_mouse_y), self.unfiltered_image_coords)
+                self.should_state = 100
+                self.zoom_mode = True
+            if e.type == pg.MOUSEBUTTONUP:
+                self.mouse_on = False
+            if e.type == pg.MOUSEWHEEL:
+                self.should_state = 100
+                self.zoom_mode = True
+                self.zoom_ratio *= self.zoom_rate ** e.y
+                sz = self.get_unzoomed_img_size()
+                neww = self.zoom_ratio * sz[0]
+                newh = self.zoom_ratio * sz[1]
+                #If this zoom out would theoretically make the image smaller than the frame
+                if neww < self.width or newh < self.height:
+                    #Check which dimension is the worse offender and constrain image to that one
+                    if neww/self.width < newh/self.height:
+                        self.zoom_ratio = self.width / sz[0]
+                    else:
+                        self.zoom_ratio = self.height / sz[1]
+                    neww = self.zoom_ratio * sz[0]
+                    newh = self.zoom_ratio * sz[1]
+                self.curr_image = pg.transform.scale(self.unzoomed_image, (neww, newh))
+        if self.mouse_on: 
+            #Assume the current image is in state 100; that should have happened upon actuating mouse_on
+            surfsize = self.get_curr_img_size()
+            minx = self.width - surfsize[0] 
+            miny = self.height - surfsize[1]
+            maxx = 0
+            maxy = 0
+            self.unfiltered_image_coords = clamp2(
+                sub2((rel_mouse_x, rel_mouse_y), self.mouse_grab_offset),
+                minx,miny,maxx,maxy)
+        #print("IC:" + str(self.unfiltered_image_coords) + "MC"+ str(rel_mouse_x) + " " + str(rel_mouse_y) + "MO" + str(self.mouse_grab_offset))
+        #print(self.value)
+
+    def get_curr_image(self):
         if self.should_state == 100:
             if self.image_state != self.should_state:
                 self.image_state = self.should_state
                 self.curr_image = (self.unfiltered_image_source)()
-            interface.screen.blit(self.curr_image, (x+c[0],y+c[1]))
-            #Todo: Handle scaling and covering
+                self.unzoomed_image = self.curr_image
         if self.should_state == 200:
             if self.image_state != self.should_state:
                 self.image_state = self.should_state
                 self.curr_image = (self.filtered_image_source)(self.excerpt)
-            interface.screen.blit(self.curr_image, (x,y))
 
         if self.should_state == 300:
             if self.image_state != self.should_state:
                 self.image_state = self.should_state
                 self.curr_image = (self.loading_image_source)()
                 self.should_state = 200
-            interface.screen.blit(self.curr_image, (x,y))
-    
-    def try_drag_zoom(self):
-        #TODO Update Zoom and Zoom MOde with dragging
 
-        pass
-        #updates excerpt and coordinates, saves
+        return self.curr_image
+
+    def render(self, interface, x, y):
+        #TODO Add thread so it doesnt wait
+        #Figure out some sort of regeneration event
+        c = self.unfiltered_image_coords
+        if self.should_state == 100:
+            w = interface.uiconf.width
+            h = interface.uiconf.height()
+            xo = self.unfiltered_image_coords[0]
+            yo = self.unfiltered_image_coords[1]
+            interface.screen.blit(self.get_curr_image(), (x+xo,y+yo))
+            neg1 = pg.Rect(0,          0,x,h)
+            neg2 = pg.Rect(0,          0,w,y)
+            neg3 = pg.Rect(self.width ,0,w - self.width,h)
+            neg4 = pg.Rect(0,self.height,w             ,h - self.height)
+            pg.draw.rect(interface.screen, interface.uiconf.background_color, neg1)
+            pg.draw.rect(interface.screen, interface.uiconf.background_color, neg2)
+            pg.draw.rect(interface.screen, interface.uiconf.background_color, neg3)
+            pg.draw.rect(interface.screen, interface.uiconf.background_color, neg4)
+            
+            #Todo: Handle scaling and covering
+        if self.should_state == 200 or self.should_state == 300:
+            interface.screen.blit(self.get_curr_image(), (x,y))
 
 class Interface:
     #Config
@@ -268,7 +352,7 @@ class Interface:
     screen = None
     clock = None
 
-    #States
+    #Elements
     sliders : list[Slider] = []
     save_and_next_button : Button = None
     quit_button : Button = None
@@ -285,11 +369,12 @@ class Interface:
 
     def begin_window(self):
         pg.init()
-        self.screen = pg.display.set_mode((width, height))
+        self.screen = pg.display.set_mode((self.uiconf.width, self.uiconf.height()))
         pg.display.set_caption(self.imagefilterconf.name)
         self.clock = pg.time.Clock()
         pg.font.init()
-        self.uiconf.font = pg.font.Font(self.uiconf.font_lib, size = self.uiconf.font_size)
+        self.uiconf.font =       pg.font.Font(self.uiconf.font_lib, size = self.uiconf.font_size)
+        self.uiconf.font_small = pg.font.Font(self.uiconf.font_lib, size = self.uiconf.font_size_small)
 
     #word wrap code from pygame.org wiki
     def drawText(self, surface, text, color, rect, font, aa=False, bkg=None):
@@ -316,25 +401,67 @@ class Interface:
         return text
 
     def await_select_folder(self):
-        pass
+        while True:
+            (mx, my) = pg.mouse.get_pos()
+            self.screen.fill(self.uiconf.background_color)
+            await_alert_box = pg.Rect(100,100,500,500)
+            self.drawText(self.screen, "Please select infolder to see images", self.uiconf.text_color, await_alert_box, self.uiconf.font)
+            self.select_infolder_button.render_rec(self, mx, my)
+            self.select_outfolder_button.render_rec(self, mx, my)
+            self.cache_button.render_rec(self, mx, my)
+            self.save_and_next_button.render_rec(self, mx, my)
+            self.quit_button.render_rec(self, mx, my)
+            
+
+            pg.display.update() 
+            self.clock.tick(60)
+            recent_events = [e for e in pg.event.get()]
+
+            if self.select_infolder_button.was_just_clicked(mx - self.select_infolder_button.recc_x, 
+                                                            my - self.select_infolder_button.recc_y, 
+                                                            recent_events):
+                self.select_input_folder()
+
+            if self.select_outfolder_button.was_just_clicked(mx - self.select_outfolder_button.recc_x, 
+                                                             my - self.select_outfolder_button.recc_y, 
+                                                             recent_events):
+                self.select_output_folder()
+
+            if self.quit_button.was_just_clicked(mx - self.quit_button.recc_x, 
+                                                 my - self.quit_button.recc_y, 
+                                                 recent_events):
+                pg.quit()
+                return "q"
+
+            if self.select_outfolder_button.was_just_clicked(mx, my, recent_events):
+                self.select_output_folder()
+
+            if self.quit_button.was_just_clicked(mx, my, recent_events):
+                pg.quit()
+                return "q"
+            
+            for e in recent_events:
+                if e.type == pg.QUIT:
+                    pg.quit()
+                
+
+    def select_input_folder(self):
+        self.input_folder = filedialog.askdirectory(title="Select Input Folder")
+        print(f"Selected input folder: {self.input_folder}")
+
+    def select_output_folder(self):
+        self.output_folder = askopenfile(title="Select Output Folder")
+        print(f"Selected output folder: {self.output_folder}")
 
     def image_operations(self):
-        counter = 0
-        poop = Button(str(counter), self.uiconf.font, 80, 80, self.uiconf.button_color, self.uiconf.hover_color, self.uiconf.text_color)
-        pee = Slider(5, 15, 10, "#123456", "#654321")
+        pee = Slider(5, 15, 10, "#123456")
         fart = ImagePreviewBox(500, 500)
         ImagePreviewBox.curr_fp = "test.JPG"
         ImagePreviewBox.loading_fp = "testload.PNG"
         while True:
             (mx, my) = pg.mouse.get_pos()
             self.screen.fill(self.uiconf.background_color)
-            await_alert_box = pg.Rect(100,100,500,500)
-            self.drawText(self.screen, "Please select infolder to see images", self.uiconf.text_color, await_alert_box, self.uiconf.font)
-            change_infolder_block = pg.Rect(50,50,80,80)
-
             fart.render(self, 50, 50)
-
-            poop.render(self, 50, 50, mx - 50, my - 50)
 
             pee.render(self, 100,100)
 
@@ -345,14 +472,57 @@ class Interface:
                 if e.type == pg.QUIT:
                     pg.quit()
 
-            if poop.was_just_clicked(mx - 50, my - 50, recent_events):
-                counter += 1
-                poop.label = str(counter)
             pee.try_slider(mx - 100, my - 100, recent_events)      
+            fart.try_drag_zoom(mx - 50, my - 50, recent_events)
 
 
     def main(self):
         self.sliders = []
+        self.select_infolder_button = Button("Select Input  Folder",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              recc_x = 600,
+                                              recc_y = 50+5)
+        self.select_outfolder_button = Button("Select Output Folder",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              recc_x = 600,
+                                              recc_y = 50+50+5
+                                              )
+        self.cache_button            = Button("Cache Window",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              recc_x = 600,
+                                              recc_y = 50+100+5
+                                              )
+        self.save_and_next_button    = Button("Save and Next",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              recc_x = 600,
+                                              recc_y = 50+150+5
+                                              )
+        self.quit_button            = Button("Quit",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              recc_x = 600,
+                                              recc_y = 50+200+5
+                                              )
+        
         si = self.imagefilterconf
         for i in range(len(si.property_names)):
             s = Slider()
@@ -362,7 +532,7 @@ class Interface:
             s.name = si.property_names[i]
             self.sliders.append()
             
-        #self.await_select_folder()
+        self.await_select_folder()
         self.image_operations()
 
         #Display all elements
@@ -411,7 +581,3 @@ class Interface:
 interface : Interface = Interface()
 interface.begin_window()
 interface.main()
-#begin_window()
-#print(create_and_await_mcq("What is the capital of France?", ["Paris", "London", "Berlin", "Madrid"]))
-#selected = create_and_await_mcq("What is the capital of France?", ["Paris", "London", "Berlin", "Madrid"])
-#print(correctness_feedback_mcq("What is the capital of France?", ["Paris", "London", "Berlin", "Madrid"], 0, selected))
