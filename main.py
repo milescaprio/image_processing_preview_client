@@ -1,3 +1,4 @@
+import os
 import pygame as pg
 from utils import *
 from typing import Callable
@@ -11,7 +12,7 @@ from tkinter import filedialog
 class UIConfiguation:
     text_color = "#616161"
     background_color = "#FDF6E3"
-    background_color2 = "#FF0000"
+    inactive_color = "#CCCCCC"
     button_color = "#FAFAFA"
     hover_color = "#ABA696"
     typing_background = "#FFFFFF"
@@ -127,14 +128,16 @@ class Button:
     label : str = "Unnamed Button"
     height = 100
     width = 100
-    color = "#999999"
-    hover_color = "#888888"
-    text_color = "#555555"
+    color = None
+    hover_color = None
+    text_color = None
+    inactive_color = None
     font = None
+    active = True #if false, button will appear greyed out and will not respond to clicks
     recc_x : int = 0 #Reccomended location, for storing in configuration. Non-binding to this location.
     recc_y : int = 0
 
-    def __init__(self, label, font, width, height, color, hover_color, text_color, recc_x, recc_y):
+    def __init__(self, label, font, width, height, color, hover_color, text_color, inactive_color, recc_x = None, recc_y = None):
         self.label =label
         self.font = font
         self.width = width
@@ -142,6 +145,7 @@ class Button:
         self.color = color
         self.hover_color = hover_color
         self.text_color = text_color
+        self.inactive_color = inactive_color
         self.recc_x = recc_x
         self.recc_y = recc_y
     def is_mouse_over(self, rel_mouse_x, rel_mouse_y):
@@ -150,18 +154,25 @@ class Button:
 
     def was_just_clicked(self, rel_mouse_x, rel_mouse_y, recent_events) -> bool:
         mob = self.is_mouse_over(rel_mouse_x, rel_mouse_y)
+        if not self.active:
+            return False
         for e in recent_events:
             if e.type == pg.MOUSEBUTTONDOWN and mob:
                 return True
+        return False
             
     def render(self, interface, x, y, mouse_x, mouse_y):
         rel_mouse_x = mouse_x - x
         rel_mouse_y = mouse_y - y
         r = pg.Rect(x,y,self.width,self.height)
-        pg.draw.rect(interface.screen, self.hover_color if self.is_mouse_over(rel_mouse_x, rel_mouse_y) else self.color, r)
+        print(self.color)
+        print(self.hover_color)
+        print(self.inactive_color)
+        color = (self.hover_color if self.is_mouse_over(rel_mouse_x, rel_mouse_y) else self.color) if self.active else self.inactive_color
+        pg.draw.rect(interface.screen, color, r)
         interface.drawText(interface.screen, self.label, self.text_color, r, self.font, aa = True)
     
-    def render_rec(self, interface, mouse_x, mouse_y):
+    def render_recc(self, interface, mouse_x, mouse_y):
         self.render(interface, self.recc_x, self.recc_y, mouse_x, mouse_y)
 
 class ImagePreviewBox:
@@ -177,6 +188,8 @@ class ImagePreviewBox:
     #Configuration
     height = 400
     width = 400
+    recc_x = 0
+    recc_y = 0
     apply_properties_to_low_res_img : bool = True
 
     #Variables
@@ -185,6 +198,7 @@ class ImagePreviewBox:
     unfiltered_image_zoom : int = 1
     unfiltered_original_size : tuple[int,int] = None
     unzoomed_image : pg.Surface = None
+    input_folder : str = None
     curr_image : pg.Surface = None
     curr_fp : str = None
     loading_fp : str = None
@@ -216,7 +230,9 @@ class ImagePreviewBox:
 
     def __init__(self, height, width, unfiltered_image_source = None, 
                                       filtered_image_source = None, 
-                                      loading_image_source = None):
+                                      loading_image_source = None,
+                                      loading_fp = "load.png",
+                                      recc_x = None, recc_y = None):
         if unfiltered_image_source == None:
             unfiltered_image_source = self.default_source_routine
         if filtered_image_source == None:
@@ -228,6 +244,7 @@ class ImagePreviewBox:
         self.unfiltered_image_source = unfiltered_image_source
         self.filtered_image_source = filtered_image_source
         self.loading_image_source = loading_image_source
+        self.loading_fp = loading_fp
 
     def from_pil_to_pg(img):
         numpy_array = np.array(img)
@@ -242,10 +259,12 @@ class ImagePreviewBox:
         return ImagePreviewBox.from_pil_to_pg(img)
 
     def default_source_routine(self):
-        return pg.image.load(self.curr_fp)
+        print(self.input_folder)
+        print(self.curr_fp)
+        return pg.image.load(self.input_folder + "/" + self.curr_fp if self.input_folder else self.curr_fp)
 
     def default_loading_source_routine(self):
-        return pg.image.load(self.curr_fp)
+        return pg.image.load(self.loading_fp)
 
     def get_excerpt_focus(self) -> list[tuple[int,int]]:
         #return PLACEHOLDER
@@ -307,6 +326,7 @@ class ImagePreviewBox:
                 self.image_state = self.should_state
                 self.curr_image = (self.unfiltered_image_source)()
                 self.unzoomed_image = self.curr_image
+
         if self.should_state == 200:
             if self.image_state != self.should_state:
                 self.image_state = self.should_state
@@ -330,6 +350,9 @@ class ImagePreviewBox:
             xo = self.unfiltered_image_coords[0]
             yo = self.unfiltered_image_coords[1]
             interface.screen.blit(self.get_curr_image(), (x+xo,y+yo))
+            #TODO: Add an alternative implementation to the negative space so it doesnt
+            #result in the likely confusion of having other parts cut off in the event
+            #of rending in the wrong order
             neg1 = pg.Rect(0,          0,x,h)
             neg2 = pg.Rect(0,          0,w,y)
             neg3 = pg.Rect(self.width ,0,w - self.width,h)
@@ -342,7 +365,10 @@ class ImagePreviewBox:
             #Todo: Handle scaling and covering
         if self.should_state == 200 or self.should_state == 300:
             interface.screen.blit(self.get_curr_image(), (x,y))
-
+    
+    def render_recc(self, interface):
+        self.render(interface, self.recc_x, self.recc_y)
+    
 class Interface:
     #Config
     uiconf : UIConfiguation = UIConfiguation()
@@ -359,12 +385,13 @@ class Interface:
     select_infolder_button : Button = None
     select_outfolder_button : Button = None
     reenable_auto_filter_button : Button = None
+    ip_box : ImagePreviewBox = None
 
     #Variables
     infolder : str = None
     outfolder : str = None
     curr_img : str = None
-    curr_img_i : str = 0
+    curr_img_i : str = None
     imgs_cache : list[str] = None
 
     def begin_window(self):
@@ -400,20 +427,85 @@ class Interface:
             text = text[i:]
         return text
 
-    def await_select_folder(self):
-        while True:
-            (mx, my) = pg.mouse.get_pos()
-            self.screen.fill(self.uiconf.background_color)
-            await_alert_box = pg.Rect(100,100,500,500)
-            self.drawText(self.screen, "Please select infolder to see images", self.uiconf.text_color, await_alert_box, self.uiconf.font)
-            self.select_infolder_button.render_rec(self, mx, my)
-            self.select_outfolder_button.render_rec(self, mx, my)
-            self.cache_button.render_rec(self, mx, my)
-            self.save_and_next_button.render_rec(self, mx, my)
-            self.quit_button.render_rec(self, mx, my)
-            
+    def ui_init(self):
+        self.sliders = []
+        self.select_infolder_button = Button("Select Input  Folder",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              self.uiconf.inactive_color,
+                                              recc_x = 600,
+                                              recc_y = 50+5)
+        self.select_outfolder_button = Button("Select Output Folder",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              self.uiconf.inactive_color,
+                                              recc_x = 600,
+                                              recc_y = 50+50+5
+                                              )
+        self.cache_button            = Button("Cache Window",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              self.uiconf.inactive_color,
+                                              recc_x = 600,
+                                              recc_y = 50+100+5
+                                              )
+        self.cache_button.active = False
+        self.save_and_next_button    = Button("Save and Next",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              self.uiconf.inactive_color,
+                                              recc_x = 600,
+                                              recc_y = 50+150+5
+                                              )
+        self.save_and_next_button.active = False
+        self.quit_button            = Button("Quit",
+                                              self.uiconf.font_small,
+                                                100, 40,
+                                              self.uiconf.button_color,
+                                              self.uiconf.hover_color,
+                                              self.uiconf.text_color,
+                                              self.uiconf.inactive_color,
+                                              recc_x = 600,
+                                              recc_y = 50+200+5
+                                              )
+        self.await_alert_box = pg.Rect(100,100,500,500)
+        self.ip_box = ImagePreviewBox(500, 500, recc_x = 50, recc_y = 50)
 
-            pg.display.update() 
+    def image_operations(self):
+        while True:
+            #Init
+            (mx, my) = pg.mouse.get_pos()
+
+            #Render
+            self.screen.fill(self.uiconf.background_color)
+            if self.curr_img_i is None:
+                self.drawText(self.screen, "Please select infolder to see images", self.uiconf.text_color, self.await_alert_box, self.uiconf.font)
+                self.cache_button.active = False
+                self.save_and_next_button.active = False
+            else: 
+                self.ip_box.render_recc(self)
+                self.cache_button.active = True
+                self.save_and_next_button.active = True
+            self.select_infolder_button.render_recc(self, mx, my)
+            self.select_outfolder_button.render_recc(self, mx, my)
+            self.cache_button.render_recc(self, mx, my)
+            self.save_and_next_button.render_recc(self, mx, my)
+            self.quit_button.render_recc(self, mx, my)
+            
+            #Routine
+            pg.display.update()
             self.clock.tick(60)
             recent_events = [e for e in pg.event.get()]
 
@@ -427,112 +519,84 @@ class Interface:
                                                              recent_events):
                 self.select_output_folder()
 
+            if self.save_and_next_button.was_just_clicked(mx - self.save_and_next_button.recc_x,
+                                                            my - self.save_and_next_button.recc_y,
+                                                            recent_events):
+                self.save_and_next()
+
             if self.quit_button.was_just_clicked(mx - self.quit_button.recc_x, 
                                                  my - self.quit_button.recc_y, 
                                                  recent_events):
                 pg.quit()
                 return "q"
 
-            if self.select_outfolder_button.was_just_clicked(mx, my, recent_events):
-                self.select_output_folder()
+            self.ip_box.try_drag_zoom(mx - self.ip_box.recc_x, my - self.ip_box.recc_y, recent_events)
 
-            if self.quit_button.was_just_clicked(mx, my, recent_events):
-                pg.quit()
-                return "q"
-            
+            #Digest other events    
             for e in recent_events:
                 if e.type == pg.QUIT:
                     pg.quit()
                 
 
     def select_input_folder(self):
-        self.input_folder = filedialog.askdirectory(title="Select Input Folder")
-        print(f"Selected input folder: {self.input_folder}")
+        self.ip_box.input_folder = filedialog.askdirectory(title="Select Input Folder")
+        self.imgs_cache = []
+
+        for file in os.listdir(self.ip_box.input_folder):
+            if file.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.pcx', '.tga', '.tif', '.lbm', '.pbm', '.pgm', '.ppm', '.xpm')):
+                self.imgs_cache.append(file)
+        self.curr_img_i = -1
+        self.save_and_next()
+
 
     def select_output_folder(self):
-        self.output_folder = askopenfile(title="Select Output Folder")
-        print(f"Selected output folder: {self.output_folder}")
+        self.output_folder = filedialog.askdirectory(title="Select Output Folder")
 
-    def image_operations(self):
-        pee = Slider(5, 15, 10, "#123456")
-        fart = ImagePreviewBox(500, 500)
-        ImagePreviewBox.curr_fp = "test.JPG"
-        ImagePreviewBox.loading_fp = "testload.PNG"
-        while True:
-            (mx, my) = pg.mouse.get_pos()
-            self.screen.fill(self.uiconf.background_color)
-            fart.render(self, 50, 50)
+    def save_and_next(self):
+        if self.curr_img_i != -1:
+            pass #WILL REPLACE THIS LINE TO SAVE IMAGE
+            #TODO: Save image in functional filepath
+        self.curr_img_i += 1
+        self.curr_img = self.imgs_cache[self.curr_img_i]
+        self.ip_box.curr_fp = self.curr_img
+        self.ip_box.image_state = 0
 
-            pee.render(self, 100,100)
+    # def image_operations_test(self):
+    #     pee = Slider(5, 15, 10, "#123456")
+    #     fart = ImagePreviewBox(500, 500)
+    #     ImagePreviewBox.curr_fp = "test.JPG"
+    #     ImagePreviewBox.loading_fp = "testload.PNG"
+    #     while True:
+    #         (mx, my) = pg.mouse.get_pos()
+    #         self.screen.fill(self.uiconf.background_color)
+    #         fart.render(self, 50, 50)
 
-            pg.display.update() 
-            self.clock.tick(60)
-            recent_events = [e for e in pg.event.get()]
-            for e in recent_events:
-                if e.type == pg.QUIT:
-                    pg.quit()
+    #         pee.render(self, 100,100)
 
-            pee.try_slider(mx - 100, my - 100, recent_events)      
-            fart.try_drag_zoom(mx - 50, my - 50, recent_events)
+    #         pg.display.update() 
+    #         self.clock.tick(60)
+    #         recent_events = [e for e in pg.event.get()]
+    #         for e in recent_events:
+    #             if e.type == pg.QUIT:
+    #                 pg.quit()
 
+    #         pee.try_slider(mx - 100, my - 100, recent_events)      
+    #         fart.try_drag_zoom(mx - 50, my - 50, recent_events)
 
+    
     def main(self):
-        self.sliders = []
-        self.select_infolder_button = Button("Select Input  Folder",
-                                              self.uiconf.font_small,
-                                                100, 40,
-                                              self.uiconf.button_color,
-                                              self.uiconf.hover_color,
-                                              self.uiconf.text_color,
-                                              recc_x = 600,
-                                              recc_y = 50+5)
-        self.select_outfolder_button = Button("Select Output Folder",
-                                              self.uiconf.font_small,
-                                                100, 40,
-                                              self.uiconf.button_color,
-                                              self.uiconf.hover_color,
-                                              self.uiconf.text_color,
-                                              recc_x = 600,
-                                              recc_y = 50+50+5
-                                              )
-        self.cache_button            = Button("Cache Window",
-                                              self.uiconf.font_small,
-                                                100, 40,
-                                              self.uiconf.button_color,
-                                              self.uiconf.hover_color,
-                                              self.uiconf.text_color,
-                                              recc_x = 600,
-                                              recc_y = 50+100+5
-                                              )
-        self.save_and_next_button    = Button("Save and Next",
-                                              self.uiconf.font_small,
-                                                100, 40,
-                                              self.uiconf.button_color,
-                                              self.uiconf.hover_color,
-                                              self.uiconf.text_color,
-                                              recc_x = 600,
-                                              recc_y = 50+150+5
-                                              )
-        self.quit_button            = Button("Quit",
-                                              self.uiconf.font_small,
-                                                100, 40,
-                                              self.uiconf.button_color,
-                                              self.uiconf.hover_color,
-                                              self.uiconf.text_color,
-                                              recc_x = 600,
-                                              recc_y = 50+200+5
-                                              )
-        
         si = self.imagefilterconf
+
+        #Generate Sliders
         for i in range(len(si.property_names)):
             s = Slider()
             s.interval_left = si.property_intervals[i][0]
             s.interval_right = si.property_intervals[i][1]
             s.interval_segments = si.property_interval_segments[i]
             s.name = si.property_names[i]
-            self.sliders.append()
+            self.sliders.append(s)
             
-        self.await_select_folder()
+        self.ui_init()
         self.image_operations()
 
         #Display all elements
