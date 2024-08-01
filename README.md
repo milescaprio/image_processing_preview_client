@@ -1,4 +1,4 @@
-#Image Processing Preview Client#
+# Image Processing Preview Client #
 
 An application to quickly reapply filters on images and export them in batch amounts.
 
